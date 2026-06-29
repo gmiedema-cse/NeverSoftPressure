@@ -293,7 +293,7 @@ var FIRMWARE_URL     = RAW_BASE + '/' + FIRMWARE_PATH;
 var REQUIRED_VERSION = '3.2';   // hardcoded -- caps below this get flagged
 // Build date of the firmware in BCD (YY, MM, DD) -- update when releasing new firmware
 // e.g. [0x26, 0x06, 0x04] = June 4, 2026
-var FIRMWARE_BUILD_DATE = [0x26, 0x06, 0x19];  // June 19 2026 = 26170
+var FIRMWARE_BUILD_DATE = [0x26, 0x06, 0x29];  // June 29 2026 = 26180
 
 var NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 var NUS_RX      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
@@ -399,13 +399,28 @@ function parseVersionReply(bytes) {
   return { version: txt || null, julian: null };
 }
 
-function versionNeedsUpdate(capVer, required) {
+// fwJulian: ordinal date of the firmware build (from FIRMWARE_BUILD_DATE), e.g. 26180.
+// If the cap reports the same version number but an older Julian date, it is
+// still flagged for OTA so a same-version rebuild is pushed out correctly.
+var FW_JULIAN = bcdToOrdinal(FIRMWARE_BUILD_DATE[0], FIRMWARE_BUILD_DATE[1], FIRMWARE_BUILD_DATE[2]);
+
+function versionNeedsUpdate(capVer, required, capJulian) {
   if (!capVer) return true;
   if (!required) return false;
   var cv = capVer.split('.').map(Number);
   var rv = required.split('.').map(Number);
-  if (cv[0] !== rv[0]) return cv[0] < rv[0];
-  return cv[1] < rv[1];
+  // Primary check: version numbers
+  var verCmp;
+  if (cv[0] !== rv[0]) {
+    verCmp = cv[0] < rv[0] ? -1 : 1;
+  } else {
+    verCmp = cv[1] < rv[1] ? -1 : (cv[1] > rv[1] ? 1 : 0);
+  }
+  if (verCmp < 0) return true;   // cap version is older
+  if (verCmp > 0) return false;  // cap version is newer (don't downgrade)
+  // Versions are equal -- compare Julian dates to catch same-version rebuilds
+  if (capJulian && FW_JULIAN && capJulian < FW_JULIAN) return true;
+  return false;
 }
 
 function capFirmwareLabel(cap) {
@@ -439,7 +454,7 @@ async function checkCapVersion(cap) {
     var parsed = parseVersionReply(reply);
     cap.version = parsed.version;
     cap.julian  = parsed.julian;
-    cap.needsUpdate = versionNeedsUpdate(parsed.version, requiredVersion);
+    cap.needsUpdate = versionNeedsUpdate(parsed.version, requiredVersion, parsed.julian);
     cap.status = cap.needsUpdate ? 'Firmware update required' : 'Connected';
     cap.tone   = cap.needsUpdate ? 'update' : 'good';
   }
